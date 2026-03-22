@@ -6,7 +6,7 @@ const webpush = require('web-push');
 const serviceAccount = require('./serviceAccountKey.json');
 
 // 2. These keys MUST match the ones in your HTML file!
-const publicVapidKey = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLcg05SRkqac';
+const publicVapidKey = 'BGIg5Qt9He3uHEIDBbige7V1u1sL-fh9MQXhtPlUwcgJ_DHO5ogKAFI_Efsrv4cx1jYDaPP-2yYbFbB1plpRX58';
 const privateVapidKey = 'd0m31uE-iXkY7WpA17Zk6-P51hM0N4jJ2VqH9yQp0Q0'; // KEEP THIS SECRET
 
 webpush.setVapidDetails('mailto:admin@bumblebee.com', publicVapidKey, privateVapidKey);
