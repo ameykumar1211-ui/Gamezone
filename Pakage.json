@@ -1,0 +1,13 @@
+{
+  "name": "bumblebee-backend",
+  "version": "1.0.0",
+  "description": "Notification server for Gamezone",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.0.0",
+    "web-push": "^3.4.5"
+  }
+}
