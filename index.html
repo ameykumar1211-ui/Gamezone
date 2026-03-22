@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- PWA Mobile Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0B0F19">
+    <title>Bumblebee Gamezone</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, getDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- User's Provided Configuration ---
+        const userFirebaseConfig = {
+            apiKey: "AIzaSyBMB5yyQD_1MAA6dYxLgXy-tCgxTJaCa10",
+            authDomain: "gaming-zone-23648.firebaseapp.com",
+            projectId: "gaming-zone-23648",
+            storageBucket: "gaming-zone-23648.firebasestorage.app",
+            messagingSenderId: "1096819067201",
+            appId: "1:1096819067201:web:57c08fd4072accce93f9c0",
+            measurementId: "G-F0DQ4DVMRN"
+        };
+
+        // --- Data Models ---
+        const STATION_TYPES = { 
+            NORMAL: 'Normal', PREMIUM: 'Premium', SEMI: 'Semi Premium', 
+            WHEEL: 'Steering Wheel', WHEEL_AUTO: 'Steering Wheel Auto' 
+        };
+
+        const STATIONS = [
+            { id: 'ps1', name: 'PS 1', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps2', name: 'PS 2 (Steering Wheel)', type: STATION_TYPES.WHEEL, p1: 150, pM: 150, maxP: 1 },
+            { id: 'ps3', name: 'PS 3', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps4', name: 'PS 4', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps5', name: 'PS 5 (Semi Premium)', type: STATION_TYPES.SEMI, p1: 100, pM: 90, maxP: 4 },
+            { id: 'ps6', name: 'PS 6 (Premium)', type: STATION_TYPES.PREMIUM, p1: 120, pM: 110, maxP: 4 },
+            { id: 'ps7', name: 'PS 7', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps8', name: 'PS 8', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps9', name: 'PS 9', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps10', name: 'PS 10 (Steering Auto)', type: STATION_TYPES.WHEEL_AUTO, p1: 200, pM: 200, maxP: 1 },
+            { id: 'ps11', name: 'PS 11', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+            { id: 'ps12', name: 'PS 12', type: STATION_TYPES.NORMAL, p1: 80, pM: 70, maxP: 4 },
+        ];
+
+        let currentUser = null; 
+        let allBookings = [];
+        let allUsers = [];
+        let allAdmins = [];
+        let db, auth, appId;
+        let unsubscribeBookings = null;
+        let unsubscribeUsers = null;
+        let unsubscribeAdmins = null;
+        let revenueChartInstance = null;
+        
+        window.adminTab = 'dashboard';
+        window.activeAlarms = {}; 
+        
+        // PWA Global Variables
+        window.deferredPrompt = null;
+        window.swRegistration = null;
+
+        // VAPID Public Key for Node.js Push Integration
+        const PUBLIC_VAPID_KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLcg05SRkqac';
+
+        // --- Reusable SVG Logo Template ---
+        const brandLogoSvg = `
+            <svg viewBox="0 0 100 100" class="w-full h-full">
+                <path d="M20,10 L45,10 C65,10 75,20 75,32.5 C75,42 68,48 55,50 C70,52 80,60 80,72.5 C80,85 65,90 45,90 L20,90 Z" fill="#ffffff"/>
+                <path d="M 50 25 h 10 m -5 -5 v 10" stroke="#FFD700" stroke-width="4" stroke-linecap="round"/>
+                <circle cx="55" cy="72" r="3.5" fill="#FFD700"/>
+                <circle cx="65" cy="65" r="3.5" fill="#FFD700"/>
+                <circle cx="65" cy="79" r="3.5" fill="#FFD700"/>
+                <circle cx="75" cy="72" r="3.5" fill="#FFD700"/>
+            </svg>
+        `;
+
+        // --- Base64 to Uint8Array Converter for Push API ---
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        // --- PWA & Backend Push Setup ---
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            window.deferredPrompt = e;
+            const btn = document.getElementById('install-app-btn');
+            if (btn) btn.classList.remove('hidden');
+        });
+
+        window.installPWA = async () => {
+            if (window.deferredPrompt) {
+                window.deferredPrompt.prompt();
+                const { outcome } = await window.deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    const btn = document.getElementById('install-app-btn');
+                    if(btn) btn.classList.add('hidden');
+                }
+                window.deferredPrompt = null;
+            }
+        };
+
+        const initPWA = async () => {
+            // Keep Screen Awake natively if supported
+            if ('wakeLock' in navigator) {
+                try {
+                    let wakeLock = await navigator.wakeLock.request('screen');
+                    document.addEventListener('visibilitychange', async () => {
+                        if (document.visibilityState === 'visible' && wakeLock !== null) {
+                            wakeLock = await navigator.wakeLock.request('screen');
+                        }
+                    });
+                } catch (e) { console.log("Wake Lock failed"); }
+            }
+
+            // Inject Valid Manifest
+            const manifest = {
+                name: "Bumblebee Gamezone",
+                short_name: "Bumblebee",
+                start_url: window.location.href,
+                display: "standalone",
+                background_color: "#050B14",
+                theme_color: "#FFD700",
+                icons: [{ src: "https://cdn-icons-png.flaticon.com/512/3233/3233483.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }]
+            };
+            const manifestLink = document.createElement('link');
+            manifestLink.rel = 'manifest';
+            manifestLink.href = 'data:application/manifest+json;charset=utf-8,' + encodeURIComponent(JSON.stringify(manifest));
+            document.head.appendChild(manifestLink);
+
+            // Register Inline Service Worker (Modified for Backend Push Payload)
+            if ('serviceWorker' in navigator) {
+                const swCode = `
+                    self.addEventListener('install', (e) => self.skipWaiting());
+                    self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+                    self.addEventListener('fetch', (e) => {}); 
+                    
+                    // RECEIVE PUSH FROM NODE.JS BACKEND
+                    self.addEventListener('push', (e) => {
+                        const data = e.data ? e.data.json() : {};
+                        const title = data.title || 'Gamezone Alert';
+                        const options = {
+                            body: data.body || 'Session Ended',
+                            icon: 'https://cdn-icons-png.flaticon.com/512/3233/3233483.png',
+                            vibrate: [500, 250, 500, 250, 500, 250, 500],
+                            requireInteraction: true,
+                            data: data.url || '/'
+                        };
+                        e.waitUntil(self.registration.showNotification(title, options));
+                    });
+
+                    // CLICK NOTIFICATION TO OPEN APP
+                    self.addEventListener('notificationclick', (e) => {
+                        e.notification.close();
+                        e.waitUntil(clients.matchAll({ type: 'window' }).then( windowClients => {
+                            if(windowClients.length > 0) return windowClients[0].focus();
+                            return clients.openWindow(e.notification.data);
+                        }));
+                    });
+                `;
+                try {
+                    const swBlob = new Blob([swCode], {type: 'application/javascript'});
+                    window.swRegistration = await navigator.serviceWorker.register(URL.createObjectURL(swBlob));
+                } catch (err) {
+                    console.log("Blob SW restricted by browser.");
+                }
+            }
+        };
+
+        // --- Init Firebase ---
+        const initFirebase = async () => {
+            try {
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : userFirebaseConfig;
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user && currentUser) {
+                        setupRealtimeListener();
+                    } else if (!user) {
+                        cleanupListeners();
+                    }
+                });
+
+                const savedUser = localStorage.getItem('bz_user');
+                if(savedUser) {
+                    currentUser = JSON.parse(savedUser);
+                    switchView('app-screen');
+                    if(auth.currentUser) setupRealtimeListener();
+                }
+            } catch (error) {
+                console.error("Firebase init error:", error);
+            }
+        };
+
+        const cleanupListeners = () => {
+            if (unsubscribeBookings) unsubscribeBookings();
+            if (unsubscribeUsers) unsubscribeUsers();
+            if (unsubscribeAdmins) unsubscribeAdmins();
+        }
+
+        const setupRealtimeListener = () => {
+            if (!auth.currentUser) return; 
+            cleanupListeners();
+            
+            const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
+            unsubscribeBookings = onSnapshot(bookingsRef, (snapshot) => {
+                allBookings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderDashboard();
+            });
+
+            if (currentUser.role === 'admin' || currentUser.role === 'master_admin') {
+                const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'app_users');
+                unsubscribeUsers = onSnapshot(usersRef, (snapshot) => {
+                    allUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    if (window.adminTab === 'customers') renderDashboard();
+                });
+            }
+
+            if (currentUser.role === 'master_admin') {
+                const adminRef = collection(db, 'artifacts', appId, 'public', 'data', 'admin_users');
+                unsubscribeAdmins = onSnapshot(adminRef, (snapshot) => {
+                    allAdmins = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    if (window.adminTab === 'settings') renderDashboard();
+                });
+                seedDefaultAdmins();
+            }
+        };
+
+        const seedDefaultAdmins = async () => {
+             const defaultAdmins = [ {u: 'Rehan', p: 'Team1'}, {u: 'Akram', p: 'Team2'}, {u: 'Noor', p: 'Team3'} ];
+             for(let a of defaultAdmins) {
+                  const r = doc(db, 'artifacts', appId, 'public', 'data', 'admin_users', a.u.toLowerCase());
+                  const s = await getDoc(r);
+                  if(!s.exists()) { await setDoc(r, { username: a.u, password: a.p, createdAt: Date.now(), pushSubscription: null }); }
+             }
+        }
+
+        // --- System Push Notifications & Audio Alarms ---
+        window.requestAppPermissions = async () => {
+            playSingleBeep(0.01); // Unlock audio context
+
+            if ("Notification" in window) {
+                const permission = await Notification.requestPermission();
+                if (permission === 'granted') {
+                    // Subscribe to Push Manager for Node.js Backend
+                    if (window.swRegistration) {
+                        try {
+                            const subscription = await window.swRegistration.pushManager.subscribe({
+                                userVisibleOnly: true,
+                                applicationServerKey: urlBase64ToUint8Array(PUBLIC_VAPID_KEY)
+                            });
+                            
+                            // Save subscription to Firebase so Node.js can use it
+                            if(currentUser && (currentUser.role === 'admin' || currentUser.role === 'master_admin')) {
+                                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'admin_users', currentUser.username.toLowerCase());
+                                await updateDoc(userRef, { pushSubscription: JSON.stringify(subscription) });
+                                console.log("Push Subscription saved to Database!");
+                            }
+                        } catch (err) {
+                            console.error('Failed to subscribe the user: ', err);
+                        }
+                    }
+                    renderDashboard(); // Re-render to hide banner
+                } else {
+                    alert("Notifications Denied! Please enable them in browser settings.");
+                }
+            }
+        };
+
+        const playSingleBeep = (vol = 0.5) => {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+                osc.type = 'square'; 
+                osc.frequency.setValueAtTime(850, ctx.currentTime);
+                gainNode.gain.setValueAtTime(vol, ctx.currentTime);
+                osc.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                osc.start();
+                setTimeout(() => { osc.stop(); ctx.close(); }, 500); 
+            } catch(e) {}
+        };
+
+        window.startStrongAlarm = (id) => {
+            if(window.activeAlarms[id]) return;
+            playSingleBeep(0.5); 
+            window.activeAlarms[id] = setInterval(() => playSingleBeep(0.5), 1200); 
+        };
+
+        window.stopStrongAlarm = (id) => {
+            if(window.activeAlarms[id]) {
+                clearInterval(window.activeAlarms[id]);
+                delete window.activeAlarms[id];
+            }
+        };
+
+        // --- Utilities ---
+        const formatTimeLeft = (ms) => {
+            if (ms <= 0) return "00:00:00";
+            const totalSeconds = Math.floor(ms / 1000);
+            const h = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
+            const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
+            const s = (totalSeconds % 60).toString().padStart(2, '0');
+            return `${h}:${m}:${s}`;
+        };
+
+        const formatClockTime = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const formatDate = (ts) => new Date(ts).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+
+        const calculatePrice = (station, players, durationMins) => {
+            let hourlyRate = (station.type === STATION_TYPES.WHEEL || station.type === STATION_TYPES.WHEEL_AUTO) 
+                ? station.p1 : (players === 1 ? station.p1 : station.pM * players);
+            return Math.round(hourlyRate * (durationMins / 60));
+        };
+
+        const getStationBookings = (stationId) => {
+            const now = Date.now();
+            return allBookings
+                .filter(b => b.stationId === stationId && b.endTime > now)
+                .sort((a, b) => a.startTime - b.startTime);
+        };
+
+        const showError = (elementId, message) => {
+            const el = document.getElementById(elementId);
+            if(!el) return;
+            el.innerText = message;
+            el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 5000);
+        };
+
+        // --- Notifications & Safety Timer UI ---
+        window.showEndToast = (stationId, username, bookingId, isAutoExtended = false) => {
+            const st = STATIONS.find(s=>s.id === stationId);
+            const toastId = 'toast-' + bookingId;
+            if(document.getElementById(toastId)) return;
+
+            window.startStrongAlarm(toastId);
+
+            // Note: The OS Push Notification is now triggered by the NODE.JS BACKEND.
+            // This function only handles the on-screen toast popup and audio alarm.
+            const notifTitle = `🚨 ${st.name} ${isAutoExtended ? 'Auto-Extended!' : 'Time\'s Up!'}`;
+
+            const toast = document.createElement('div');
+            toast.id = toastId;
+            toast.className = `bg-white border-l-4 ${isAutoExtended ? 'border-red-600' : 'border-[#FFD700]'} shadow-2xl p-4 rounded-r-lg flex items-start gap-3 animate-in slide-in-from-right-full duration-300 w-80 pointer-events-auto mb-3`;
+            toast.innerHTML = `
+                <div class="${isAutoExtended ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-600'} p-2 rounded-full shrink-0 animate-pulse">
+                    <i data-lucide="${isAutoExtended ? 'alert-octagon' : 'bell-ring'}" class="w-6 h-6"></i>
+                </div>
+                <div class="flex-grow">
+                    <h4 class="font-bold text-slate-800 leading-tight mb-1">${notifTitle}</h4>
+                    <p class="text-xs text-slate-500 font-medium mb-3">User: <strong class="text-slate-700">${username}</strong> ${isAutoExtended ? '<span class="text-red-600 font-black ml-1">(+30m)</span>' : ''}</p>
+                    <div class="flex flex-col gap-2">
+                        <button onclick="window.stopStrongAlarm('${toastId}'); openStopConfirm('${stationId}', '${bookingId}'); document.getElementById('${toastId}').remove();" class="text-xs bg-red-600 text-white px-3 py-2.5 rounded shadow-md font-black hover:bg-red-700 transition w-full text-center tracking-widest uppercase flex justify-center items-center gap-2"><i data-lucide="square" class="w-3 h-3"></i> Stop Session</button>
+                        <button onclick="window.stopStrongAlarm('${toastId}'); openInvoiceModal('${bookingId}'); document.getElementById('${toastId}').remove();" class="text-xs bg-slate-800 text-[#FFD700] px-3 py-2.5 rounded shadow-md font-bold hover:bg-slate-900 transition w-full text-center tracking-widest uppercase flex justify-center items-center gap-2"><i data-lucide="receipt" class="w-3 h-3"></i> View Receipt</button>
+                    </div>
+                </div>
+                <button onclick="window.stopStrongAlarm('${toastId}'); document.getElementById('${toastId}').remove()" class="text-slate-400 hover:text-slate-600 bg-slate-50 p-1 rounded-full"><i data-lucide="x" class="w-5 h-5"></i></button>
+            `;
+            document.getElementById('toast-container').appendChild(toast);
+            lucide.createIcons();
+            
+            setTimeout(() => { 
+                window.stopStrongAlarm(toastId);
+                if(document.getElementById(toastId)) document.getElementById(toastId).remove(); 
+            }, 120000); 
+        };
+
+        // --- Navigation ---
+        window.switchView = (viewId) => {
+            ['login-screen', 'register-screen', 'app-screen'].forEach(id => {
+                document.getElementById(id).classList.add('hidden');
+            });
+            document.getElementById(viewId).classList.remove('hidden');
+            
+            if(viewId === 'app-screen' && currentUser) {
+                let roleDisplay = currentUser.role === 'master_admin' ? 'Master Admin' : currentUser.role;
+                document.getElementById('nav-username').innerText = `${currentUser.username} (${roleDisplay})`;
+                document.getElementById('nav-logo').innerHTML = brandLogoSvg;
+                window.adminTab = 'dashboard';
+                renderDashboard();
+            }
+        };
+
+        window.switchAdminTab = (tabId) => {
+            window.adminTab = tabId;
+            if (revenueChartInstance && tabId !== 'dashboard') {
+                revenueChartInstance.destroy();
+                revenueChartInstance = null;
+            }
+            renderDashboard();
+        }
+
+        // --- Authentication Actions ---
+        window.handleLogin = async (e) => {
+            e.preventDefault();
+            if (!auth.currentUser) return showError('login-error', "Connecting to secure server... Please wait.");
+            
+            const username = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value.trim();
+            const btn = document.getElementById('login-btn');
+            
+            if (!username || !password) return showError('login-error', "Please fill all fields");
+
+            btn.innerText = "Authenticating...";
+            btn.disabled = true;
+
+            try {
+                if (username === 'Admin369' && password === 'Iamadmin') {
+                    currentUser = { username, role: 'master_admin' };
+                } else {
+                    const safeUsernameId = username.toLowerCase();
+                    const adminRef = doc(db, 'artifacts', appId, 'public', 'data', 'admin_users', safeUsernameId);
+                    const adminSnap = await getDoc(adminRef);
+                    
+                    if (adminSnap.exists() && adminSnap.data().password === password) {
+                        currentUser = { username: adminSnap.data().username, role: 'admin' };
+                    } else {
+                        const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'app_users', safeUsernameId);
+                        const userSnap = await getDoc(userRef);
+
+                        if (!userSnap.exists()) throw new Error("Account not found. Please register first.");
+                        if (userSnap.data().password !== password) throw new Error("Incorrect password. Please try again.");
+                        currentUser = { username: userSnap.data().username, role: 'user', phone: userSnap.data().phone };
+                    }
+                }
+                
+                localStorage.setItem('bz_user', JSON.stringify(currentUser));
+                switchView('app-screen');
+                setupRealtimeListener();
+            } catch (err) {
+                showError('login-error', err.message);
+            } finally {
+                btn.innerText = "LOGIN";
+                btn.disabled = false;
+            }
+        };
+
+        window.handleRegister = async (e) => {
+            e.preventDefault();
+            if (!auth.currentUser) return showError('reg-error', "Connecting to secure server... Please wait.");
+            
+            const username = document.getElementById('reg-username').value.trim();
+            const phone = document.getElementById('reg-phone').value.trim();
+            const password = document.getElementById('reg-password').value.trim();
+            const btn = document.getElementById('reg-btn');
+
+            if (!username || !phone || !password) return showError('reg-error', "Please fill all fields");
+
+            btn.innerText = "Creating account...";
+            btn.disabled = true;
+
+            try {
+                const safeUsernameId = username.toLowerCase();
+                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'app_users', safeUsernameId);
+                const userSnap = await getDoc(userRef);
+
+                if (userSnap.exists()) throw new Error("Username already taken. Please choose another.");
+
+                await setDoc(userRef, { username, password, phone, createdAt: Date.now() });
+
+                currentUser = { username, role: 'user', phone };
+                localStorage.setItem('bz_user', JSON.stringify(currentUser));
+                switchView('app-screen');
+                setupRealtimeListener();
+            } catch (err) {
+                showError('reg-error', err.message);
+            } finally {
+                btn.innerText = "SIGN UP";
+                btn.disabled = false;
+            }
+        };
+
+        window.logout = () => {
+            currentUser = null;
+            localStorage.removeItem('bz_user');
+            cleanupListeners();
+            Object.keys(window.activeAlarms).forEach(id => window.stopStrongAlarm(id));
+            if (revenueChartInstance) {
+                revenueChartInstance.destroy();
+                revenueChartInstance = null;
+            }
+            switchView('login-screen');
+            document.getElementById('login-username').value = '';
+            document.getElementById('login-password').value = '';
+        };
+
+        // --- Master Admin Actions ---
+        window.clearAllData = async () => {
+            if (!currentUser || currentUser.role !== 'master_admin') return;
+            
+            const pass = prompt("WARNING: This will delete ALL revenue and booking history forever. Type 'CONFIRM' exactly to proceed.");
+            if (pass !== 'CONFIRM') return;
+
+            document.getElementById('dashboard-content').innerHTML = `
+                 <div class="flex flex-col items-center justify-center py-20">
+                    <div class="w-16 h-16 border-4 border-slate-200 border-t-red-600 rounded-full animate-spin mb-4"></div>
+                    <h3 class="font-bold text-slate-700">Wiping database...</h3>
+                 </div>
+            `;
+
+            try {
+                const deletePromises = allBookings.map(b => {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id);
+                    return deleteDoc(docRef);
+                });
+                
+                await Promise.all(deletePromises);
+                allBookings = []; 
+                alert("All bookings and revenue data wiped successfully.");
+                renderDashboard();
+            } catch(e) {
+                alert("Failed to clear data.");
+                renderDashboard();
+            }
+        };
+
+        window.addNewAdmin = async (e) => {
+            e.preventDefault();
+            if (!currentUser || currentUser.role !== 'master_admin') return;
+            
+            const u = document.getElementById('new-admin-username').value.trim();
+            const p = document.getElementById('new-admin-password').value.trim();
+            const btn = document.getElementById('add-admin-btn');
+            
+            if (!u || !p) return;
+            btn.innerText = "Adding...";
+            btn.disabled = true;
+            
+            try {
+                const ref = doc(db, 'artifacts', appId, 'public', 'data', 'admin_users', u.toLowerCase());
+                await setDoc(ref, { username: u, password: p, createdAt: Date.now(), pushSubscription: null });
+                document.getElementById('new-admin-username').value = '';
+                document.getElementById('new-admin-password').value = '';
+            } catch (err) { alert("Error adding admin."); } 
+            finally { btn.innerText = "Add Admin"; btn.disabled = false; }
+        };
+
+        window.deleteAdmin = async (adminId) => {
+            if (!currentUser || currentUser.role !== 'master_admin') return;
+            if (!confirm("Are you sure you want to revoke this admin's access?")) return;
+            try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'admin_users', adminId)); } 
+            catch(e) { alert("Error deleting admin."); }
+        };
+
+        // --- Booking Actions (User & Admin Walk-in) ---
+        window.openBookingModal = (stationId, isAdminWalkin = false) => {
+            const station = STATIONS.find(s => s.id === stationId);
+            const sb = getStationBookings(stationId);
+            const startTime = sb.length > 0 ? sb[sb.length - 1].endTime : Date.now();
+            const isQueued = startTime > Date.now();
+
+            window.currentBookingForm = { 
+                players: 1, duration: 60, isAdmin: isAdminWalkin,
+                username: isAdminWalkin ? '' : currentUser.username,
+                phone: isAdminWalkin ? '' : (currentUser.phone || '')
+            };
+
+            let modalHtml = `
+                <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
+                    <div class="bg-slate-50 p-5 border-b border-slate-100 flex justify-between items-center shrink-0">
+                        <h2 class="text-xl font-bold text-slate-800">${isAdminWalkin ? 'Start Session' : 'Book'} - ${station.name}</h2>
+                        <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 bg-white p-1 rounded-full shadow-sm"><i data-lucide="x" class="w-5 h-5"></i></button>
+                    </div>
+                    
+                    <div class="p-6 space-y-5 overflow-y-auto">
+                        ${isQueued ? `<div class="bg-orange-100 text-orange-800 text-xs font-bold px-4 py-3 rounded-lg flex items-center gap-2 mb-2">
+                            <i data-lucide="alert-circle" class="w-5 h-5"></i> Queue active. Session starts at ${formatClockTime(startTime)}.
+                        </div>` : ''}
+                        
+                        <div id="booking-error" class="hidden bg-red-100 text-red-700 p-3 rounded-lg text-sm font-semibold text-center border border-red-200"></div>
+                        
+                        ${isAdminWalkin ? `
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-semibold text-slate-700 mb-2">Customer Username / Name</label>
+                                <input type="text" id="walkin-name" value="" placeholder="Enter customer name" class="w-full px-4 py-3 rounded-lg border-2 border-slate-200 focus:border-[#FFD700] outline-none font-medium text-slate-700" oninput="window.currentBookingForm.username = this.value">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold text-slate-700 mb-2">Phone Number</label>
+                                <input type="tel" id="walkin-phone" value="" placeholder="Enter mobile number" class="w-full px-4 py-3 rounded-lg border-2 border-slate-200 focus:border-[#FFD700] outline-none font-medium text-slate-700" oninput="window.currentBookingForm.phone = this.value">
+                            </div>
+                        </div>` : ''}
+
+                        <div>
+                            <label class="block text-sm font-semibold text-slate-700 mb-2">Number of Players</label>
+                            <div class="flex gap-2">
+                                ${Array.from({length: station.maxP}, (_, i) => i + 1).map(p => `
+                                    <button onclick="updateBookingForm('${stationId}', ${p})" id="btn-player-${p}" class="flex-1 py-2 rounded-lg font-medium border-2 ${p === 1 ? 'border-[#FFD700] bg-yellow-50 text-yellow-800' : 'border-slate-200 text-slate-600'} player-btn">
+                                        ${p}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-slate-700 mb-2">Duration</label>
+                            <select id="booking-duration" onchange="updateBookingForm('${stationId}')" class="w-full px-4 py-3 rounded-lg border-2 border-slate-200 focus:border-[#FFD700] outline-none font-medium text-slate-700">
+                                <option value="1">1 Minute (Test Mode)</option>
+                                <option value="30">30 Minutes</option>
+                                <option value="60" selected>1 Hour</option>
+                                <option value="120">2 Hours</option>
+                                <option value="180">3 Hours</option>
+                            </select>
+                        </div>
+                        
+                        <div class="bg-slate-50 rounded-xl p-4 border border-slate-100 flex justify-between items-center">
+                            <span class="text-slate-500 font-medium">Total Cost</span>
+                            <span id="booking-cost" class="text-2xl font-black text-slate-800">₹${calculatePrice(station, 1, 60)}</span>
+                        </div>
+                        
+                        <div>
+                             <label class="block text-sm font-semibold text-slate-700 mb-2">Payment Method</label>
+                             <select id="booking-payment" onchange="toggleUPIFields()" class="w-full px-4 py-3 rounded-lg border-2 border-slate-200 focus:border-[#FFD700] outline-none font-medium text-slate-700">
+                                <option value="Cash">Pay at Counter (Cash)</option>
+                                ${!isAdminWalkin ? `<option value="UPI">Online Payment (UPI)</option>` : ''}
+                            </select>
+                        </div>
+
+                        ${!isAdminWalkin ? `
+                        <div id="upi-fields" class="hidden bg-[#f8fafc] border border-slate-200 rounded-xl p-4 mt-2 mb-4">
+                            <p class="text-xs text-slate-600 font-medium mb-1">Please pay exactly the total cost to:</p>
+                            <div class="flex items-center gap-2 mb-3 bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                                <i data-lucide="smartphone-nfc" class="w-5 h-5 text-[#00BFFF]"></i>
+                                <p class="font-bold text-slate-800 text-lg select-all">mktv2233-2@okaxis</p>
+                            </div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">12-Digit Transaction ID (UTR)</label>
+                            <input type="text" id="upi-txn-id" maxlength="12" class="w-full px-3 py-3 rounded-lg border border-slate-300 focus:border-[#00BFFF] outline-none text-base font-mono tracking-widest bg-white" placeholder="e.g. 601234567890">
+                            <p class="text-[10px] text-slate-500 mt-2 leading-tight">Must be exactly 12 numeric digits from your bank app.</p>
+                        </div>` : ''}
+                    </div>
+                    
+                    <div class="p-4 border-t border-slate-100 flex gap-3 bg-white shrink-0" id="booking-actions">
+                        <button onclick="closeModal()" class="flex-1 py-3 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition shadow-sm">Cancel</button>
+                        <button onclick="submitBooking('${stationId}', ${startTime})" id="confirm-booking-btn" class="flex-[2] py-3 bg-[#FFD700] text-slate-900 font-black rounded-xl hover:bg-yellow-500 shadow-md transition text-lg tracking-wide uppercase">${isAdminWalkin ? 'Start Timer' : 'Confirm'}</button>
+                    </div>
+                </div>
+            `;
+            const container = document.getElementById('modal-container');
+            container.innerHTML = modalHtml;
+            container.classList.remove('hidden');
+            lucide.createIcons();
+        };
+
+        window.updateBookingForm = (stationId, players = window.currentBookingForm.players) => {
+            const station = STATIONS.find(s => s.id === stationId);
+            const duration = parseInt(document.getElementById('booking-duration').value);
+            window.currentBookingForm.players = players;
+            window.currentBookingForm.duration = duration;
+            
+            document.querySelectorAll('.player-btn').forEach(btn => {
+                btn.className = "flex-1 py-2 rounded-lg font-medium border-2 border-slate-200 text-slate-600 player-btn";
+            });
+            document.getElementById(`btn-player-${players}`).className = "flex-1 py-2 rounded-lg font-medium border-2 border-[#FFD700] bg-yellow-50 text-yellow-800 player-btn";
+            
+            document.getElementById('booking-cost').innerText = `₹${calculatePrice(station, players, duration)}`;
+        };
+
+        window.toggleUPIFields = () => {
+            const method = document.getElementById('booking-payment').value;
+            const upiFields = document.getElementById('upi-fields');
+            if(upiFields) {
+                if(method === 'UPI') {
+                    upiFields.classList.remove('hidden');
+                    setTimeout(() => upiFields.parentElement.scrollTop = upiFields.parentElement.scrollHeight, 50);
+                } else {
+                    upiFields.classList.add('hidden');
+                }
+            }
+        };
+
+        window.submitBooking = async (stationId, startTime) => {
+            if (!auth.currentUser) return showError('booking-error', "Secure connection lost.");
+
+            let { duration, players, username, phone, isAdmin } = window.currentBookingForm;
+            const btn = document.getElementById('confirm-booking-btn');
+            if (btn) btn.disabled = true;
+
+            if (isAdmin) {
+                const walkinInput = document.getElementById('walkin-name');
+                const phoneInput = document.getElementById('walkin-phone');
+                if (walkinInput) username = walkinInput.value.trim();
+                if (phoneInput) phone = phoneInput.value.trim();
+
+                if (!username) {
+                    if (btn) btn.disabled = false; return showError('booking-error', "Please enter a customer username or name.");
+                }
+                if (!phone) {
+                    if (btn) btn.disabled = false; return showError('booking-error', "Please enter a valid phone number.");
+                }
+
+                try {
+                    const safeUsernameId = username.toLowerCase();
+                    const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'app_users', safeUsernameId);
+                    const userSnap = await getDoc(userRef);
+
+                    if (!userSnap.exists()) {
+                        await setDoc(userRef, { username: username, password: phone, phone: phone, createdAt: Date.now(), autoCreatedByAdmin: true });
+                    } else {
+                        username = userSnap.data().username;
+                    }
+                } catch (error) {
+                    if (btn) btn.disabled = false; return showError('booking-error', "Error connecting to server.");
+                }
+            }
+
+            const paymentMethod = document.getElementById('booking-payment').value;
+            const station = STATIONS.find(s => s.id === stationId);
+            const cost = calculatePrice(station, players, duration);
+            const endTime = startTime + (duration * 60 * 1000);
+            
+            let txnId = "N/A";
+            
+            if(paymentMethod === 'UPI') {
+                txnId = document.getElementById('upi-txn-id').value.trim();
+                if(!txnId) { if (btn) btn.disabled = false; return showError('booking-error', "Transaction ID is required for online payments."); }
+                if(txnId.length !== 12 || isNaN(txnId)) { if (btn) btn.disabled = false; return showError('booking-error', "Invalid length. Transaction ID must be exactly 12 numeric digits."); }
+
+                const isSequential = /^(0123456789|1234567890)/.test(txnId);
+                const isRepeated = /^(.)\1{11}$/.test(txnId);
+                const validUpiStart = /^[4567]/.test(txnId);
+
+                if(isSequential || isRepeated || !validUpiStart) {
+                    if (btn) btn.disabled = false; return showError('booking-error', "Verification Failed: Invalid UTR format.");
+                }
+
+                const container = document.getElementById('modal-container');
+                container.innerHTML = `
+                    <div class="bg-[#111827] rounded-2xl shadow-2xl p-10 flex flex-col items-center max-w-sm w-full animate-in fade-in zoom-in">
+                        <div class="w-16 h-16 border-4 border-slate-700 border-t-[#00BFFF] rounded-full animate-spin mb-4"></div>
+                        <h3 class="text-xl font-bold text-white">Bank Verification</h3>
+                        <p class="text-sm text-slate-400 mt-2 text-center">Checking transaction validity with NPCI for UTR <br><span class="font-mono font-bold text-[#FFD700] mt-2 inline-block tracking-widest">${txnId}</span>...</p>
+                    </div>
+                `;
+                await new Promise(resolve => setTimeout(resolve, 2500));
+            }
+
+            try {
+                const bookingId = Math.random().toString(36).substr(2, 9);
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bookingId);
+                await setDoc(docRef, { 
+                    stationId, username, phone: phone || '', players, durationMins: duration, cost, startTime, endTime, 
+                    paymentMethod, txnId, paymentStatus: paymentMethod === 'UPI' ? 'Paid' : 'Pending', invoiced: false, 
+                    isPaused: false, pausedAt: null, sessionEnded: false, isOvertime: false
+                });
+                closeModal();
+            } catch (err) {
+                 if (btn) btn.disabled = false; showError('booking-error', "Booking failed. Network or permission error.");
+            }
+        };
+
+        window.closeModal = () => { document.getElementById('modal-container').classList.add('hidden'); };
+
+        // --- Pause / Resume Logic ---
+        window.togglePause = async (stationId, bookingId, isCurrentlyPaused) => {
+            if (!auth.currentUser) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bookingId);
+            try {
+                if (!isCurrentlyPaused) {
+                    await updateDoc(docRef, { isPaused: true, pausedAt: Date.now() });
+                } else {
+                    const booking = allBookings.find(b => b.id === bookingId);
+                    const timePaused = Date.now() - booking.pausedAt;
+                    const newEndTime = booking.endTime + timePaused;
+
+                    await updateDoc(docRef, { isPaused: false, endTime: newEndTime, pausedAt: null });
+
+                    const queue = getStationBookings(stationId).filter(b => b.id !== bookingId && b.startTime >= booking.pausedAt);
+                    for(const qb of queue) {
+                        const qRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', qb.id);
+                        await updateDoc(qRef, { startTime: qb.startTime + timePaused, endTime: qb.endTime + timePaused });
+                    }
+                }
+            } catch(e) { alert("Action failed. Check permissions."); }
+        };
+
+        // --- Stop and Billing Logic ---
+        window.openStopConfirm = (stationId, bookingId) => {
+            const container = document.getElementById('modal-container');
+            container.innerHTML = `
+                <div class="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm animate-in fade-in zoom-in duration-200">
+                    <div class="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4 text-red-600 mx-auto">
+                        <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+                    </div>
+                    <h3 class="text-lg font-bold text-center text-slate-800 mb-2">Stop Session Immediately?</h3>
+                    <p class="text-center text-slate-500 text-sm mb-6">This ends the active session and prepares the invoice for billing.</p>
+                    <div class="flex gap-3">
+                        <button onclick="closeModal()" class="flex-1 py-2.5 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 transition">Cancel</button>
+                        <button onclick="forceStop('${stationId}', '${bookingId}')" class="flex-1 py-2.5 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition shadow-md">Stop Now</button>
+                    </div>
+                </div>
+            `;
+            container.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        window.forceStop = async (stationId, bookingId) => {
+            if (!auth.currentUser) return;
+            document.getElementById('modal-container').innerHTML = `
+                 <div class="bg-[#111827] rounded-2xl shadow-2xl p-10 flex flex-col items-center max-w-sm w-full">
+                    <div class="w-10 h-10 border-4 border-slate-700 border-t-[#FFD700] rounded-full animate-spin mb-4"></div>
+                    <h3 class="font-bold text-white">Processing...</h3>
+                 </div>
+            `;
+
+            try {
+                const sb = getStationBookings(stationId);
+                let currentEnd = Date.now();
+                for (const b of sb) {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id);
+                    if (b.id === bookingId) {
+                        await updateDoc(docRef, { endTime: currentEnd, sessionEnded: true });
+                    } else {
+                        const newStart = currentEnd;
+                        const newEnd = newStart + (b.durationMins * 60 * 1000);
+                        currentEnd = newEnd;
+                        await updateDoc(docRef, { startTime: newStart, endTime: newEnd });
+                    }
+                }
+            } catch (err) { }
+            closeModal();
+        };
+
+        window.openInvoiceModal = (bookingId) => {
+            const booking = allBookings.find(b => b.id === bookingId);
+            if(!booking) return;
+            const station = STATIONS.find(s => s.id === booking.stationId);
+            const isPending = booking.paymentStatus === 'Pending';
+
+            let invoiceHtml = `
+                <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200 border border-slate-200 flex flex-col max-h-[90vh]">
+                    <div class="p-6 pb-4 text-center border-b-2 border-dashed border-slate-200 shrink-0 bg-[#0B0F19]">
+                        <div class="flex flex-col items-center justify-center">
+                            <div class="w-12 h-12 mb-2">${brandLogoSvg}</div>
+                            <h2 class="text-xl font-black italic tracking-wide text-[#FFD700] uppercase leading-none drop-shadow-md">BumbleBee</h2>
+                            <p class="text-[9px] font-black tracking-[0.25em] text-[#00BFFF] uppercase mt-1 leading-none">Gaming Zone</p>
+                        </div>
+                        <p class="text-[10px] text-slate-400 mt-4 font-mono uppercase tracking-widest">Receipt #${booking.id}</p>
+                    </div>
+
+                    <div class="p-6 space-y-4 overflow-y-auto">
+                        <div class="flex justify-between items-end border-b border-slate-100 pb-2">
+                            <span class="text-xs text-slate-500 font-bold uppercase">Customer</span>
+                            <div class="text-right">
+                                <span class="text-sm font-bold text-slate-800">${booking.username}</span>
+                                ${booking.phone ? `<p class="text-[10px] text-slate-500">${booking.phone}</p>` : ''}
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-end border-b border-slate-100 pb-2">
+                            <span class="text-xs text-slate-500 font-bold uppercase">Station</span>
+                            <span class="text-sm font-bold text-slate-800">${station.name}</span>
+                        </div>
+                        <div class="flex justify-between items-end border-b border-slate-100 pb-2">
+                            <span class="text-xs text-slate-500 font-bold uppercase">Date & Time</span>
+                            <div class="text-right">
+                                <p class="text-sm font-bold text-slate-800">${formatDate(booking.startTime)}</p>
+                                <p class="text-xs text-slate-500">${formatClockTime(booking.startTime)} - ${formatClockTime(booking.endTime)}</p>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-end border-b border-slate-100 pb-2">
+                            <span class="text-xs text-slate-500 font-bold uppercase">Duration</span>
+                            <span class="text-sm font-bold text-slate-800">${booking.durationMins} Mins (${booking.players} Player/s)</span>
+                        </div>
+                        <div class="flex justify-between items-end border-b border-slate-100 pb-2">
+                            <span class="text-xs text-slate-500 font-bold uppercase">Payment Info</span>
+                            <div class="text-right">
+                                <p class="text-sm font-bold ${isPending ? 'text-orange-600' : 'text-[#00BFFF]'}">${booking.paymentMethod} - ${booking.paymentStatus}</p>
+                                ${booking.paymentMethod === 'UPI' ? `<p class="text-[10px] text-slate-400 font-mono">Txn: ${booking.txnId}</p>` : ''}
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-50 rounded-lg p-4 mt-4 flex justify-between items-center border border-slate-200">
+                            <span class="text-sm font-bold text-slate-600 uppercase">Total Amount</span>
+                            <span class="text-2xl font-black text-slate-800">₹${booking.cost}</span>
+                        </div>
+                        
+                        ${isPending ? `
+                            <div class="bg-orange-50 border border-orange-200 text-orange-800 p-3 rounded-lg text-xs font-bold flex items-center gap-2 mt-2">
+                                <i data-lucide="hand-coins" class="w-4 h-4"></i> Please collect cash from customer.
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <div class="p-4 bg-slate-50 border-t border-slate-200 flex gap-3 shrink-0">
+                        <button onclick="closeModal()" class="flex-1 py-3 bg-white border border-slate-300 text-slate-600 font-bold rounded-xl hover:bg-slate-100 transition">Close</button>
+                        <button onclick="markAsBilled('${booking.id}')" class="flex-[2] py-3 bg-[#FFD700] text-slate-900 font-black rounded-xl hover:bg-yellow-500 shadow-md transition flex justify-center items-center gap-2 uppercase tracking-wide">
+                            <i data-lucide="printer" class="w-4 h-4"></i> Mark Billed
+                        </button>
+                    </div>
+                </div>
+            `;
+            const container = document.getElementById('modal-container');
+            container.innerHTML = invoiceHtml;
+            container.classList.remove('hidden');
+            lucide.createIcons();
+        };
+
+        window.markAsBilled = async (bookingId) => {
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', bookingId);
+                await updateDoc(docRef, { invoiced: true, paymentStatus: 'Paid' });
+                closeModal();
+            } catch(err) { }
+        };
+
+        // --- UI Rendering ---
+        const renderDashboard = () => {
+            if (!currentUser) return;
+            const container = document.getElementById('dashboard-content');
+            
+            if (currentUser.role === 'admin' || currentUser.role === 'master_admin') {
+                
+                let html = '';
+
+                if ("Notification" in window && Notification.permission !== "granted") {
+                    html += `
+                    <div id="notification-warning" class="mb-6 bg-red-100 border-l-4 border-red-600 text-red-800 px-5 py-4 rounded-r-xl flex flex-col md:flex-row md:items-center justify-between shadow-sm animate-in slide-in-from-top duration-300">
+                        <div class="flex items-start md:items-center gap-3 mb-3 md:mb-0">
+                            <div class="bg-red-200 p-2 rounded-full shrink-0"><i data-lucide="bell-off" class="w-5 h-5 text-red-600"></i></div>
+                            <div>
+                                <h4 class="font-bold text-sm">Enable Alerts & Sound Required</h4>
+                                <p class="text-xs mt-0.5">Please allow notifications to receive pop-ups. Tip: Install the app to your Home Screen using the button at the top for the best experience!</p>
+                            </div>
+                        </div>
+                        <button onclick="requestAppPermissions()" class="bg-red-600 text-white px-5 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider shadow-md hover:bg-red-700 transition shrink-0 whitespace-nowrap"><i data-lucide="bell-ring" class="w-4 h-4 inline mr-1"></i> Allow Now</button>
+                    </div>
+                    `;
+                }
+
+                html += `
+                    <div class="flex gap-2 md:gap-4 mb-6 border-b border-slate-200 pb-2 overflow-x-auto shrink-0">
+                        <button onclick="switchAdminTab('dashboard')" class="shrink-0 px-4 py-2 font-bold rounded-lg transition-colors ${window.adminTab === 'dashboard' ? 'bg-[#FFD700] text-slate-900 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'} flex items-center gap-2"><i data-lucide="monitor-play" class="w-4 h-4"></i> Live Stations</button>
+                        <button onclick="switchAdminTab('customers')" class="shrink-0 px-4 py-2 font-bold rounded-lg transition-colors ${window.adminTab === 'customers' ? 'bg-[#FFD700] text-slate-900 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'} flex items-center gap-2"><i data-lucide="users" class="w-4 h-4"></i> Customers</button>
+                        ${currentUser.role === 'master_admin' ? `<button onclick="switchAdminTab('settings')" class="shrink-0 px-4 py-2 font-bold rounded-lg transition-colors ${window.adminTab === 'settings' ? 'bg-slate-800 text-[#FFD700] shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-100'} flex items-center gap-2"><i data-lucide="settings" class="w-4 h-4"></i> System Settings</button>` : ''}
+                    </div>
+                `;
+
+                if (window.adminTab === 'dashboard') {
+                    const nowObj = new Date();
+                    const nowTime = nowObj.getTime();
+                    const currentMonthIndex = nowObj.getMonth();
+                    const currentYear = nowObj.getFullYear();
+                    const currentDate = nowObj.getDate();
+                    
+                    const completedUnbilled = allBookings.filter(b => b.endTime <= nowTime && !b.isPaused && !b.invoiced).sort((a,b) => b.endTime - a.endTime);
+                    const activeCount = STATIONS.filter(s => getStationBookings(s.id).length > 0 && getStationBookings(s.id)[0].startTime <= nowTime).length;
+                    const billedBookings = allBookings.filter(b => b.invoiced);
+                    const completedCount = billedBookings.length;
+                    
+                    let dailyRevenue = 0;
+                    let monthlyRevenue = 0;
+                    let totalRevenue = 0;
+                    const chartLabels = [];
+                    const chartData = [0, 0, 0, 0, 0, 0];
+
+                    if (currentUser.role === 'master_admin') {
+                        for (let i = 5; i >= 0; i--) {
+                            const d = new Date(currentYear, currentMonthIndex - i, 1);
+                            chartLabels.push(d.toLocaleString('default', { month: 'short' }) + ' ' + d.getFullYear().toString().substr(-2));
+                        }
+                    }
+
+                    billedBookings.forEach(b => {
+                        totalRevenue += b.cost;
+                        const bDate = new Date(b.startTime);
+                        const bMonth = bDate.getMonth();
+                        const bYear = bDate.getFullYear();
+                        const bDateNum = bDate.getDate();
+
+                        if (bDateNum === currentDate && bMonth === currentMonthIndex && bYear === currentYear) dailyRevenue += b.cost;
+                        if (bMonth === currentMonthIndex && bYear === currentYear) monthlyRevenue += b.cost;
+
+                        if (currentUser.role === 'master_admin') {
+                            for (let i = 0; i < 6; i++) {
+                                const targetDate = new Date(currentYear, currentMonthIndex - (5 - i), 1);
+                                if (bMonth === targetDate.getMonth() && bYear === targetDate.getFullYear()) {
+                                    chartData[i] += b.cost;
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    html += `
+                        <div class="flex flex-col xl:flex-row gap-6 animate-in fade-in duration-300">
+                            <div class="flex-grow space-y-6">
+                                <div class="grid grid-cols-2 md:grid-cols-3 ${currentUser.role === 'master_admin' ? 'lg:grid-cols-6' : 'lg:grid-cols-4'} gap-4">
+                                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
+                                        <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Active Now</p>
+                                        <p class="text-3xl font-black text-slate-800">${activeCount}</p>
+                                    </div>
+                                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
+                                        <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Billed Sessions</p>
+                                        <p class="text-3xl font-black text-slate-800">${completedCount}</p>
+                                    </div>
+                                    <div class="bg-cyan-50 p-5 rounded-xl shadow-sm border border-cyan-100 flex flex-col justify-center">
+                                        <p class="text-[10px] font-bold text-cyan-600 uppercase tracking-widest mb-1">Today's Income</p>
+                                        <p class="text-3xl font-black text-cyan-700">₹${dailyRevenue}</p>
+                                    </div>
+                                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex flex-col justify-center">
+                                        <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Stations</p>
+                                        <p class="text-3xl font-black text-slate-800">${STATIONS.length}</p>
+                                    </div>
+                    `;
+
+                    if (currentUser.role === 'master_admin') {
+                        html += `
+                                    <div class="bg-indigo-50 p-5 rounded-xl shadow-sm border border-indigo-100 flex flex-col justify-center">
+                                        <p class="text-[10px] font-bold text-indigo-600 uppercase tracking-widest mb-1">This Month</p>
+                                        <p class="text-3xl font-black text-indigo-700">₹${monthlyRevenue}</p>
+                                    </div>
+                                    <div class="bg-green-50 p-5 rounded-xl shadow-sm border border-green-100 flex flex-col justify-center">
+                                        <p class="text-[10px] font-bold text-green-600 uppercase tracking-widest mb-1">Total Revenue</p>
+                                        <p class="text-3xl font-black text-green-700">₹${totalRevenue}</p>
+                                    </div>
+                        `;
+                    }
+                    
+                    html += `</div>`; 
+
+                    if (currentUser.role === 'master_admin') {
+                        html += `
+                                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                                    <div class="flex justify-between items-center mb-4">
+                                        <h3 class="font-bold text-slate-800 flex items-center gap-2">
+                                            <i data-lucide="bar-chart-3" class="w-5 h-5 text-indigo-500"></i> Revenue Trend (Last 6 Months)
+                                        </h3>
+                                    </div>
+                                    <div class="w-full h-56 relative">
+                                        <canvas id="revenueChart"></canvas>
+                                    </div>
+                                </div>
+                        `;
+                    }
+
+                    html += `
+                                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    `;
+
+                    STATIONS.forEach(station => {
+                        const sb = getStationBookings(station.id);
+                        const active = sb[0] && sb[0].startTime <= nowTime ? sb[0] : null;
+                        const queue = sb.slice(active ? 1 : 0);
+
+                        html += `
+                            <div class="bg-white rounded-xl shadow-sm border ${active ? (active.isPaused ? 'border-yellow-400 ring-1 ring-yellow-400/50' : 'border-green-400 ring-1 ring-green-400/50') : 'border-slate-200'} flex flex-col h-full overflow-hidden">
+                                <div class="p-4 border-b border-slate-100 flex justify-between items-start ${active && active.isPaused ? 'bg-yellow-50' : ''}">
+                                    <div>
+                                        <div class="flex items-center gap-2 mb-1">
+                                            <div class="w-2.5 h-2.5 rounded-full ${active ? (active.isPaused ? 'bg-yellow-500' : 'bg-green-500 animate-pulse') : 'bg-slate-300'}"></div>
+                                            <h3 class="font-bold text-slate-800 flex items-center">${station.name}
+                                                ${active && active.isOvertime ? `<span class="bg-red-100 text-red-600 text-[8px] px-1.5 py-0.5 rounded-sm font-black tracking-widest uppercase ml-2 border border-red-200 animate-pulse">Overtime</span>` : ''}
+                                            </h3>
+                                        </div>
+                                        <p class="text-[10px] font-bold uppercase text-slate-500">${station.type}</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="p-5 text-center flex-grow flex flex-col justify-center">
+                                    ${active ? `
+                                        <p class="text-xs text-slate-500 font-medium mb-1">Started: ${formatClockTime(active.startTime)}</p>
+                                        <div class="text-3xl font-mono font-bold timer-element ${active.isOvertime ? 'text-red-600' : ''}" data-timer-end="${active.endTime}" data-status="active" data-is-paused="${active.isPaused}" data-paused-at="${active.pausedAt || 0}">
+                                            --:--:--
+                                        </div>
+                                        <div class="flex gap-2 justify-center mt-3">
+                                            ${active.isPaused ? 
+                                                `<button onclick="togglePause('${station.id}', '${active.id}', true)" class="px-3 py-1.5 bg-green-100 text-green-700 rounded text-xs font-bold hover:bg-green-200 flex items-center gap-1"><i data-lucide="play" class="w-3 h-3"></i> Resume</button>` : 
+                                                `<button onclick="togglePause('${station.id}', '${active.id}', false)" class="px-3 py-1.5 bg-yellow-100 text-yellow-700 rounded text-xs font-bold hover:bg-yellow-200 flex items-center gap-1"><i data-lucide="pause" class="w-3 h-3"></i> Pause</button>`
+                                            }
+                                            <button onclick="openStopConfirm('${station.id}', '${active.id}')" class="px-3 py-1.5 bg-red-100 text-red-700 rounded text-xs font-bold hover:bg-red-200 flex items-center gap-1"><i data-lucide="square" class="w-3 h-3"></i> End</button>
+                                        </div>
+                                        <div class="mt-4 text-xs font-medium space-y-1 text-left bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                            <p class="text-slate-700 flex justify-between"><span>👤 User:</span> <span class="font-bold truncate w-24 text-right">${active.username}</span></p>
+                                            <p class="text-slate-700 flex justify-between"><span>💳 Method:</span> <span class="${active.paymentMethod === 'UPI' ? 'text-[#00BFFF] font-bold' : 'text-orange-600 font-bold'}">${active.paymentMethod}</span></p>
+                                        </div>
+                                    ` : `
+                                        <div class="flex flex-col items-center justify-center py-2">
+                                            <i data-lucide="monitor-play" class="w-8 h-8 mb-2 text-slate-300"></i>
+                                            <p class="font-medium text-slate-400 text-sm mb-4">Available</p>
+                                            <button onclick="openBookingModal('${station.id}', true)" class="px-4 py-2 bg-[#111827] text-white text-xs font-bold rounded-lg hover:bg-slate-800 transition shadow flex items-center gap-2">
+                                                <i data-lucide="play" class="w-3 h-3 text-[#FFD700]"></i> Start Session
+                                            </button>
+                                        </div>
+                                    `}
+                                </div>
+                                
+                                ${queue.length > 0 ? `
+                                    <div class="px-4 py-3 bg-slate-50 rounded-b-xl border-t border-slate-100">
+                                        <p class="text-[10px] font-black uppercase text-indigo-600 mb-2 flex items-center gap-1"><i data-lucide="list" class="w-3 h-3"></i> Next in Queue (${queue.length}):</p>
+                                        ${queue.map(q => `
+                                            <div class="text-[11px] flex justify-between text-slate-600 mb-1 border-b border-slate-200/50 pb-1 last:border-0 last:mb-0 last:pb-0 font-medium">
+                                                <span class="truncate max-w-[120px]">${q.username}</span>
+                                                <span>Starts: ${formatClockTime(q.startTime)}</span>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : `<div class="h-2 bg-slate-50 rounded-b-xl border-t border-slate-100"></div>`}
+                            </div>
+                        `;
+                    });
+                    
+                    html += `
+                                </div>
+                            </div>
+
+                            <!-- Right Side: Billing Sidebar -->
+                            <div class="w-full xl:w-96 flex-shrink-0">
+                                <div class="bg-white rounded-xl shadow-sm border border-slate-200 sticky top-24 overflow-hidden flex flex-col max-h-[calc(100vh-8rem)]">
+                                    <div class="p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                                        <div>
+                                            <h2 class="font-bold text-slate-800 flex items-center gap-2"><i data-lucide="receipt" class="w-5 h-5 text-slate-700"></i> Pending Billing</h2>
+                                            <p class="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-wider">Generate invoices for finished sessions</p>
+                                        </div>
+                                        <span class="bg-[#FFD700] text-slate-900 text-xs font-black px-2 py-1 rounded-full">${completedUnbilled.length}</span>
+                                    </div>
+                                    <div class="p-4 flex-grow overflow-y-auto space-y-3 bg-slate-50/50">
+                                        ${completedUnbilled.length > 0 ? completedUnbilled.map(b => {
+                                            const st = STATIONS.find(s=>s.id === b.stationId);
+                                            const isPending = b.paymentStatus === 'Pending';
+                                            return `
+                                            <div class="bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition shadow-sm relative overflow-hidden">
+                                                <div class="absolute left-0 top-0 bottom-0 w-1 bg-[#FFD700]"></div>
+                                                <div class="flex justify-between items-start mb-2 pl-2">
+                                                    <h4 class="font-bold text-slate-800 text-sm">${st.name}</h4>
+                                                    <span class="text-[10px] font-bold px-2 py-1 rounded ${isPending ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}">${b.paymentStatus}</span>
+                                                </div>
+                                                <div class="text-xs text-slate-500 space-y-1 mb-3 pl-2">
+                                                    <p>User: <strong class="text-slate-700">${b.username}</strong></p>
+                                                    <p>Ended: ${formatClockTime(b.endTime)}</p>
+                                                    <p class="text-lg font-black text-slate-800 mt-1">₹${b.cost}</p>
+                                                </div>
+                                                <button onclick="openInvoiceModal('${b.id}')" class="w-full py-2 bg-slate-800 text-[#FFD700] text-xs font-bold rounded flex justify-center items-center gap-2 hover:bg-slate-900 transition uppercase tracking-wide">
+                                                    Generate Invoice <i data-lucide="arrow-right" class="w-3 h-3"></i>
+                                                </button>
+                                            </div>
+                                        `}).join('') : `
+                                            <div class="text-center py-12 text-slate-400 flex flex-col items-center">
+                                                <div class="bg-white p-4 rounded-full shadow-sm mb-3">
+                                                    <i data-lucide="check-circle-2" class="w-8 h-8 text-green-400"></i>
+                                                </div>
+                                                <p class="text-sm font-bold text-slate-500">All Caught Up!</p>
+                                                <p class="text-xs mt-1">No pending invoices to process.</p>
+                                            </div>
+                                        `}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML = html;
+                    lucide.createIcons();
+
+                    const ctx = document.getElementById('revenueChart');
+                    if (ctx && currentUser.role === 'master_admin') {
+                        revenueChartInstance = new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels: chartLabels,
+                                datasets: [{
+                                    label: 'Monthly Revenue (₹)',
+                                    data: chartData,
+                                    backgroundColor: '#FFD700',
+                                    hoverBackgroundColor: '#eab308',
+                                    borderRadius: 4,
+                                    barPercentage: 0.6,
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                    legend: { display: false },
+                                    tooltip: {
+                                        backgroundColor: '#1e293b',
+                                        titleColor: '#FFD700',
+                                        bodyColor: '#ffffff',
+                                        padding: 10,
+                                        cornerRadius: 8,
+                                        displayColors: false,
+                                        callbacks: { label: function(context) { return '₹' + context.parsed.y; } }
+                                    }
+                                },
+                                scales: {
+                                    y: {
+                                        beginAtZero: true,
+                                        grid: { borderDash: [4, 4], color: '#e2e8f0' },
+                                        ticks: { callback: function(value) { return '₹' + value; }, color: '#64748b', font: { size: 10 } },
+                                        border: { display: false }
+                                    },
+                                    x: {
+                                        grid: { display: false },
+                                        ticks: { color: '#64748b', font: { size: 11, weight: 'bold' } },
+                                        border: { display: false }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                } 
+                else if (window.adminTab === 'customers') {
+                    // --- CUSTOMERS TAB ---
+                    html += `
+                        <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in duration-300">
+                            <div class="p-5 border-b border-slate-100 bg-slate-50">
+                                <h2 class="font-bold text-slate-800 text-lg flex items-center gap-2"><i data-lucide="users" class="w-5 h-5 text-indigo-500"></i> Customer Directory</h2>
+                                <p class="text-xs text-slate-500 mt-1">List of all registered users and automatically added walk-ins.</p>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr class="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                                            <th class="p-4 font-bold">Username / Name</th>
+                                            <th class="p-4 font-bold">Phone Number</th>
+                                            <th class="p-4 font-bold">Date Added</th>
+                                            <th class="p-4 font-bold text-center">Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="text-sm divide-y divide-slate-100">
+                                        ${allUsers.length === 0 ? `<tr><td colspan="4" class="p-8 text-center text-slate-400">No customers found.</td></tr>` : 
+                                            allUsers.sort((a,b) => b.createdAt - a.createdAt).map(u => `
+                                            <tr class="hover:bg-slate-50 transition">
+                                                <td class="p-4 font-bold text-slate-800">${u.username}</td>
+                                                <td class="p-4 text-slate-600 font-mono">${u.phone || 'N/A'}</td>
+                                                <td class="p-4 text-slate-500 text-xs">${formatDate(u.createdAt)}</td>
+                                                <td class="p-4 text-center">
+                                                    ${u.autoCreatedByAdmin 
+                                                        ? `<span class="bg-orange-100 text-orange-700 text-[10px] px-2 py-1 rounded font-bold uppercase tracking-wide">Walk-in</span>` 
+                                                        : `<span class="bg-green-100 text-green-700 text-[10px] px-2 py-1 rounded font-bold uppercase tracking-wide">App User</span>`
+                                                    }
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML = html;
+                    lucide.createIcons();
+                }
+                else if (window.adminTab === 'settings' && currentUser.role === 'master_admin') {
+                    // --- SETTINGS TAB (Master Admin Only) ---
+                    html += `
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in duration-300">
+                            
+                            <!-- Add/Manage Admins -->
+                            <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                <div class="p-5 border-b border-slate-100 bg-slate-50">
+                                    <h2 class="font-bold text-slate-800 text-lg flex items-center gap-2"><i data-lucide="shield" class="w-5 h-5 text-indigo-500"></i> Manage Admins</h2>
+                                    <p class="text-xs text-slate-500 mt-1">Create or revoke admin access for staff.</p>
+                                </div>
+                                <div class="p-5 border-b border-slate-100 bg-indigo-50/30">
+                                    <form onsubmit="addNewAdmin(event)" class="flex gap-3 items-end">
+                                        <div class="flex-grow">
+                                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Username</label>
+                                            <input type="text" id="new-admin-username" required class="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 outline-none text-sm">
+                                        </div>
+                                        <div class="flex-grow">
+                                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
+                                            <input type="text" id="new-admin-password" required class="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 outline-none text-sm">
+                                        </div>
+                                        <button type="submit" id="add-admin-btn" class="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-indigo-700 shadow shrink-0 h-[38px] transition">Add Admin</button>
+                                    </form>
+                                </div>
+                                <div class="p-0">
+                                    <table class="w-full text-left border-collapse">
+                                        <tbody class="text-sm divide-y divide-slate-100">
+                                            ${allAdmins.map(a => `
+                                                <tr class="hover:bg-slate-50 transition">
+                                                    <td class="p-4 font-bold text-slate-800 flex items-center gap-2"><i data-lucide="user-check" class="w-4 h-4 text-indigo-400"></i> ${a.username}</td>
+                                                    <td class="p-4 text-slate-500 font-mono text-xs">Pwd: ${a.password}</td>
+                                                    <td class="p-4 text-right">
+                                                        <button onclick="deleteAdmin('${a.id}')" class="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded text-xs font-bold transition flex items-center gap-1 ml-auto"><i data-lucide="trash-2" class="w-3 h-3"></i> Revoke</button>
+                                                    </td>
+                                                </tr>
+                                            `).join('')}
+                                            ${allAdmins.length === 0 ? `<tr><td colspan="3" class="p-6 text-center text-slate-400 text-sm">No secondary admins added yet.</td></tr>` : ''}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Danger Zone -->
+                            <div class="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden h-fit">
+                                <div class="p-5 border-b border-red-100 bg-red-50">
+                                    <h2 class="font-bold text-red-800 text-lg flex items-center gap-2"><i data-lucide="alert-triangle" class="w-5 h-5"></i> Danger Zone</h2>
+                                </div>
+                                <div class="p-6 text-center">
+                                    <p class="text-slate-600 text-sm mb-6">This action will completely wipe all past bookings and reset the revenue dashboard. Station statuses will be cleared. This action is irreversible.</p>
+                                    <button onclick="clearAllData()" class="w-full py-3 bg-red-600 text-white font-black rounded-xl hover:bg-red-700 shadow-lg hover:shadow-xl transition flex justify-center items-center gap-2 uppercase tracking-wide">
+                                        <i data-lucide="trash" class="w-5 h-5"></i> Wipe All Data
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML = html;
+                    lucide.createIcons();
+                }
+            } else {
+                // --- USER VIEW ---
+                const now = Date.now();
+                const myUsername = (currentUser.username || '').toLowerCase();
+                const myBookings = allBookings.filter(b => 
+                    (b.username || '').toLowerCase() === myUsername && b.endTime > now
+                ).sort((a,b) => a.startTime - b.startTime);
+
+                let html = '';
+                if(myBookings.length > 0) {
+                    html += `
+                        <div class="bg-[#0f172a] rounded-2xl p-6 text-white shadow-lg mb-8 border border-slate-800">
+                            <h2 class="text-lg font-black tracking-wide text-[#FFD700] mb-4 flex items-center gap-2 uppercase">My Sessions</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                ${myBookings.map(b => {
+                                    const st = STATIONS.find(s=>s.id === b.stationId);
+                                    const isActive = b.startTime <= now;
+                                    return `
+                                    <div class="bg-[#1e293b] rounded-xl p-4 border border-slate-700 relative overflow-hidden">
+                                        ${isActive ? `<div class="absolute top-0 right-0 w-16 h-16 bg-[#00BFFF] opacity-10 blur-2xl rounded-full"></div>` : ''}
+                                        <div class="flex justify-between items-start mb-2 relative">
+                                            <h3 class="font-bold text-white flex items-center">${st.name} 
+                                                ${b.isOvertime ? `<span class="bg-red-500/20 text-red-400 text-[8px] px-1.5 py-0.5 rounded font-bold uppercase ml-2 border border-red-500/30 tracking-widest">Overtime</span>` : ''}
+                                            </h3>
+                                            <span class="text-[10px] px-2 py-1 rounded font-bold uppercase tracking-wider ${isActive ? 'bg-[#00BFFF]/20 text-[#00BFFF] border border-[#00BFFF]/30' : 'bg-slate-700 text-slate-300 border border-slate-600'}">${isActive ? 'ACTIVE NOW' : 'IN QUEUE'}</span>
+                                        </div>
+                                        ${isActive ? `
+                                            <div class="text-3xl font-mono mb-1 timer-element relative ${b.isPaused ? 'text-yellow-500 animate-pulse' : (b.isOvertime ? 'text-red-400' : 'text-[#FFD700]')}" data-timer-end="${b.endTime}" data-status="active" data-is-paused="${b.isPaused}" data-paused-at="${b.pausedAt || 0}">--:--:--</div>
+                                            ${b.isPaused ? `<p class="text-xs text-yellow-500 font-bold mb-1">Session Paused by Admin</p>` : ''}
+                                        ` : `
+                                            <div class="text-sm mb-1 text-slate-400 relative">Starts at <strong class="text-white text-lg ml-1">${formatClockTime(b.startTime)}</strong></div>
+                                        `}
+                                        <div class="text-xs text-slate-400 mt-4 pt-3 border-t border-slate-700 flex justify-between items-center relative">
+                                            <span class="flex items-center gap-1"><i data-lucide="check-circle-2" class="w-3 h-3 text-green-400"></i> ${b.paymentStatus}</span>
+                                            <span class="font-bold bg-black/30 px-2 py-1 rounded text-white">₹${b.cost}</span>
+                                        </div>
+                                    </div>`
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                html += `
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-bold text-slate-800">Available Stations</h2>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                `;
+
+                STATIONS.forEach(station => {
+                    const sb = getStationBookings(station.id);
+                    const availableAt = sb.length > 0 ? sb[sb.length - 1].endTime : now;
+                    const isAvailable = availableAt <= now;
+
+                    html += `
+                        <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition">
+                            <div class="p-5 flex-grow">
+                                <h3 class="font-bold text-lg text-slate-800 mb-1">${station.name}</h3>
+                                <span class="inline-block px-2 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold uppercase rounded mb-4">${station.type}</span>
+                                <div class="space-y-2 text-sm text-slate-600 mb-5 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                    <div class="flex justify-between">
+                                        <span class="flex items-center gap-1"><i data-lucide="user" class="w-4 h-4 text-slate-400"></i> Single:</span>
+                                        <span class="font-bold text-slate-800">₹${station.p1}/hr</span>
+                                    </div>
+                                    ${station.maxP > 1 ? `
+                                    <div class="flex justify-between pt-2 mt-2 border-t border-slate-200/50">
+                                        <span class="flex items-center gap-1"><i data-lucide="users" class="w-4 h-4 text-slate-400"></i> Multi:</span>
+                                        <span class="font-bold text-slate-800">₹${station.pM}/hr pp</span>
+                                    </div>` : ''}
+                                </div>
+                                <div class="flex items-center justify-center p-2 rounded text-xs font-bold ${isAvailable ? 'bg-green-50 text-green-700' : 'bg-orange-50 text-orange-700'}">
+                                    ${isAvailable ? '<i data-lucide="check-circle" class="w-4 h-4 mr-1"></i> Available Now' : `<i data-lucide="clock" class="w-4 h-4 mr-1"></i> Available at ${formatClockTime(availableAt)}`}
+                                </div>
+                            </div>
+                            <div class="p-4 bg-white border-t border-slate-100">
+                                <button onclick="openBookingModal('${station.id}')" class="w-full bg-[#111827] text-white font-bold py-2.5 rounded-lg hover:bg-slate-800 shadow-sm transition flex justify-center items-center gap-2">
+                                    ${isAvailable ? 'Book Station <i data-lucide="arrow-right" class="w-4 h-4"></i>' : 'Join Queue <i data-lucide="list-plus" class="w-4 h-4"></i>'}
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+                container.innerHTML = html;
+                lucide.createIcons();
+            }
+        };
+
+        // --- Core Application Loop (Timer & Fallback Auto-Extend) ---
+        setInterval(() => {
+            if (!currentUser) return;
+            const now = Date.now();
+            let needsRefresh = false;
+            
+            document.querySelectorAll('.timer-element').forEach(el => {
+                const endTime = parseInt(el.getAttribute('data-timer-end'));
+                const isPaused = el.getAttribute('data-is-paused') === 'true';
+                const pausedAt = parseInt(el.getAttribute('data-paused-at'));
+                const status = el.getAttribute('data-status');
+                
+                if (isPaused) {
+                    el.innerText = formatTimeLeft(endTime - pausedAt);
+                    el.classList.add('text-yellow-600', 'animate-pulse');
+                    el.classList.remove('text-slate-800', 'text-red-600');
+                } else {
+                    el.classList.remove('text-yellow-600', 'animate-pulse');
+                    if (now >= endTime) {
+                        el.innerText = "00:00:00";
+                    } else {
+                        el.innerText = formatTimeLeft(endTime - now);
+                    }
+                }
+            });
+
+            // Fallback Auto-Extend Database Engine 
+            // (If the Node.js backend isn't running, this will at least keep the database accurate)
+            if (currentUser.role === 'admin' || currentUser.role === 'master_admin') {
+                allBookings.forEach(b => {
+                    if (!b.isPaused && !b.sessionEnded && !b.invoiced && b.endTime <= now) {
+                        
+                        const oldEndTime = b.endTime;
+                        const extensionMins = 30;
+                        const extensionMs = extensionMins * 60 * 1000;
+                        
+                        b.endTime = oldEndTime + extensionMs; 
+                        b.isOvertime = true;
+
+                        const newDuration = b.durationMins + extensionMins;
+                        const station = STATIONS.find(s => s.id === b.stationId);
+                        const newCost = calculatePrice(station, b.players, newDuration);
+                        
+                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', b.id);
+                        updateDoc(docRef, { endTime: b.endTime, durationMins: newDuration, cost: newCost, isOvertime: true }).catch(e=>console.log(e));
+                        
+                        const queue = getStationBookings(b.stationId).filter(q => q.id !== b.id && q.startTime >= oldEndTime);
+                        for(const qb of queue) {
+                            const qRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', qb.id);
+                            updateDoc(qRef, { startTime: qb.startTime + extensionMs, endTime: qb.endTime + extensionMs }).catch(e=>console.log(e));
+                        }
+
+                        // Trigger the UI Pop-up
+                        showEndToast(b.stationId, b.username, b.id, true); 
+                        needsRefresh = true;
+                    }
+                });
+            }
+
+            if (needsRefresh) renderDashboard();
+        }, 1000);
+
+        window.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.logo-container').forEach(el => { el.innerHTML = brandLogoSvg; });
+            lucide.createIcons();
+        });
+
+        // Initialize Firebase and PWA setup on load
+        window.onload = () => {
+            initFirebase();
+            initPWA();
+        };
+    </script>
+</head>
+<body class="bg-gray-100 font-sans text-slate-800 min-h-screen">
+
+    <!-- Login Screen (Dark Theme) -->
+    <div id="login-screen" class="min-h-screen flex items-center justify-center p-4 bg-[#050B14]">
+        <div class="bg-[#0f172a] p-8 rounded-3xl shadow-2xl w-full max-w-md border border-slate-800 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-1 bg-[#FFD700]"></div>
+            
+            <div class="flex flex-col items-center justify-center mb-8 mt-2">
+                <div class="w-16 h-16 mb-2 logo-container"></div>
+                <h2 class="text-3xl font-black italic tracking-wide text-[#FFD700] uppercase drop-shadow-md leading-none">BumbleBee</h2>
+                <p class="text-[10px] font-black tracking-[0.3em] text-[#00BFFF] uppercase mt-1 leading-none">Gaming Zone</p>
+            </div>
+            
+            <div id="login-error" class="hidden mb-4 bg-red-900/50 text-red-200 text-sm font-semibold p-3 rounded-lg border border-red-800/50 text-center"></div>
+
+            <form onsubmit="handleLogin(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Username</label>
+                    <input id="login-username" type="text" required class="w-full px-4 py-3 rounded-lg border border-slate-700 focus:border-[#FFD700] outline-none transition bg-[#1e293b] text-white placeholder-slate-500" placeholder="Enter your username">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Password</label>
+                    <input id="login-password" type="password" required class="w-full px-4 py-3 rounded-lg border border-slate-700 focus:border-[#FFD700] outline-none transition bg-[#1e293b] text-white placeholder-slate-500" placeholder="Enter your password">
+                </div>
+                <button type="submit" id="login-btn" class="w-full bg-[#FFD700] text-slate-900 font-black py-3.5 rounded-lg hover:bg-yellow-400 shadow-lg transition mt-6 disabled:opacity-70 uppercase tracking-widest text-lg">Login</button>
+            </form>
+            
+            <div class="mt-8 text-center border-t border-slate-800 pt-6">
+                <p class="text-sm text-slate-400">Don't have an account?</p>
+                <button onclick="switchView('register-screen')" class="mt-2 text-[#00BFFF] font-bold hover:text-cyan-300 transition flex items-center justify-center gap-1 mx-auto uppercase text-xs tracking-wider">Create an Account <i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Registration Screen (Dark Theme) -->
+    <div id="register-screen" class="hidden min-h-screen flex items-center justify-center p-4 bg-[#050B14]">
+        <div class="bg-[#0f172a] p-8 rounded-3xl shadow-2xl w-full max-w-md border border-slate-800 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-1 bg-[#00BFFF]"></div>
+            
+            <div class="flex flex-col items-center justify-center mb-6 mt-2">
+                <div class="w-12 h-12 mb-2 logo-container opacity-50"></div>
+                <h2 class="text-2xl font-black text-white uppercase tracking-widest">Register</h2>
+                <p class="text-[10px] font-bold text-[#00BFFF] uppercase tracking-widest mt-1">Join The Zone</p>
+            </div>
+            
+            <div id="reg-error" class="hidden mb-4 bg-red-900/50 text-red-200 text-sm font-semibold p-3 rounded-lg border border-red-800/50 text-center"></div>
+
+            <form onsubmit="handleRegister(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Choose Username</label>
+                    <input id="reg-username" type="text" required class="w-full px-4 py-3 rounded-lg border border-slate-700 focus:border-[#00BFFF] outline-none transition bg-[#1e293b] text-white placeholder-slate-500" placeholder="e.g. Rahul_Gamer">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Phone Number</label>
+                    <input id="reg-phone" type="tel" required class="w-full px-4 py-3 rounded-lg border border-slate-700 focus:border-[#00BFFF] outline-none transition bg-[#1e293b] text-white placeholder-slate-500" placeholder="Enter mobile number">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Password</label>
+                    <input id="reg-password" type="password" required class="w-full px-4 py-3 rounded-lg border border-slate-700 focus:border-[#00BFFF] outline-none transition bg-[#1e293b] text-white placeholder-slate-500" placeholder="Create a password">
+                </div>
+                <button type="submit" id="reg-btn" class="w-full bg-[#00BFFF] text-slate-900 font-black py-3.5 rounded-lg hover:bg-cyan-400 shadow-lg transition mt-6 disabled:opacity-70 uppercase tracking-widest text-lg">Sign Up</button>
+            </form>
+            
+            <div class="mt-8 text-center border-t border-slate-800 pt-6">
+                <p class="text-sm text-slate-400">Already registered?</p>
+                <button onclick="switchView('login-screen')" class="mt-2 text-[#FFD700] font-bold hover:text-yellow-300 transition flex items-center justify-center gap-1 mx-auto uppercase text-xs tracking-wider"><i data-lucide="chevron-left" class="w-4 h-4"></i> Back to Login</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App Dashboard Screen -->
+    <div id="app-screen" class="hidden min-h-screen flex flex-col relative">
+        <nav class="bg-[#0B0F19] shadow-md border-b border-slate-800 px-6 py-3 flex justify-between items-center sticky top-0 z-10">
+            <div class="flex items-center gap-3">
+                <div id="nav-logo" class="w-10 h-10"></div>
+                <div class="flex flex-col justify-center">
+                    <h1 class="text-lg sm:text-xl font-black italic tracking-wide text-[#FFD700] uppercase leading-none drop-shadow-md">BumbleBee</h1>
+                    <p class="text-[8px] sm:text-[9px] font-black tracking-[0.25em] text-[#00BFFF] uppercase mt-1 leading-none">Gaming Zone</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3 md:gap-4">
+                <button id="install-app-btn" onclick="installPWA()" class="hidden bg-[#00BFFF] hover:bg-[#009acd] text-slate-900 px-3 py-1.5 rounded font-black text-xs uppercase tracking-wide flex items-center gap-1 transition shadow-md">
+                    <i data-lucide="download" class="w-3 h-3"></i> Install App
+                </button>
+                <div class="hidden sm:flex text-xs sm:text-sm text-slate-300 bg-[#1e293b] px-3 py-1.5 rounded-full font-bold items-center gap-2 border border-slate-700">
+                    <i data-lucide="user" class="w-3 h-3 sm:w-4 sm:h-4 text-[#FFD700]"></i>
+                    <span id="nav-username"></span>
+                </div>
+                <button onclick="logout()" class="text-slate-400 hover:text-red-400 p-2 rounded-full hover:bg-slate-800 transition" title="Logout">
+                    <i data-lucide="log-out" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </nav>
+        
+        <main class="flex-grow p-6 max-w-7xl mx-auto w-full" id="dashboard-content">
+            <!-- Rendered via JS -->
+        </main>
+        
+        <!-- Toast Notification Container (For Timer Ending) -->
+        <div id="toast-container" class="fixed top-20 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+    </div>
+
+    <!-- Modal Container -->
+    <div id="modal-container" class="hidden fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <!-- Rendered via JS -->
+    </div>
+
+</body>
+</html>
+
+
